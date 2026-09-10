@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Soporte LED · Modular telescópico</title>
+<style>
+:root{
+  --bg:#ecebe7;
+  --panel:rgba(255,255,255,.92);
+  --ink:#171717;
+  --mid:#666;
+  --line:#bbb;
+}
+*{box-sizing:border-box}
+html,body{
+  margin:0;
+  width:100%;
+  height:100%;
+  background:var(--bg);
+  color:var(--ink);
+  font-family:Arial,Helvetica,sans-serif;
+  overflow:hidden;
+  touch-action:none;
+}
+canvas{
+  display:block;
+  width:100vw;
+  height:100vh;
+}
+#ui{
+  position:fixed;
+  left:18px;
+  top:18px;
+  z-index:3;
+  width:min(340px,calc(100vw - 36px));
+  background:var(--panel);
+  padding:14px 16px;
+  border:1px solid var(--line);
+  border-radius:12px;
+  backdrop-filter:blur(8px);
+  box-shadow:0 8px 24px rgba(0,0,0,.08);
+}
+h1{
+  font-size:15px;
+  line-height:1.1;
+  margin:0 0 8px;
+}
+p{
+  font-size:11px;
+  line-height:1.4;
+  margin:6px 0;
+  color:#555;
+}
+.controls{
+  display:flex;
+  gap:6px;
+  flex-wrap:wrap;
+  margin-top:8px;
+}
+button{
+  min-height:38px;
+  padding:8px 11px;
+  border:1px solid #999;
+  border-radius:8px;
+  background:#fff;
+  color:#111;
+  cursor:pointer;
+  font-size:12px;
+}
+button:hover{background:#ddd}
+button:active{transform:translateY(1px)}
+#state{
+  font-size:11px;
+  color:#666;
+  margin-top:8px;
+}
+.small{
+  font-size:10px;
+  color:#777;
+}
+#mobileHint{
+  display:none;
+}
+
+/* ===== MOBILE ===== */
+@media (max-width: 700px){
+  #ui{
+    left:12px;
+    right:12px;
+    top:auto;
+    bottom:calc(12px + env(safe-area-inset-bottom));
+    width:auto;
+    padding:12px;
+    border-radius:14px;
+  }
+  h1{font-size:14px}
+  p{font-size:10px}
+  .controls{
+    display:grid;
+    grid-template-columns:repeat(3,1fr);
+    gap:6px;
+  }
+  button{
+    width:100%;
+    min-height:42px;
+    font-size:11px;
+    padding:8px 6px;
+  }
+  #mobileHint{
+    display:block;
+  }
+  .desktopHint{
+    display:none;
+  }
+}
+
+/* ===== MUY PEQUEÑO ===== */
+@media (max-width: 420px){
+  #ui{
+    left:8px;
+    right:8px;
+    bottom:calc(8px + env(safe-area-inset-bottom));
+    padding:10px;
+  }
+  h1{font-size:13px}
+  .controls{
+    grid-template-columns:repeat(3,1fr);
+  }
+  button{
+    min-height:40px;
+    font-size:10px;
+  }
+  #state{font-size:10px}
+  .small{font-size:9px}
+}
+</style>
+</head>
+<body>
+
+<div id="ui">
+  <h1>Sistema telescópico · Soporte LED</h1>
+  <p>
+    2 módulos de 750 mm. El modelo muestra cómo se retraen y extienden
+    los postes hasta una altura máxima de 2.50 m.
+  </p>
+
+  <div class="controls">
+    <button onclick="collapse()">Guardar</button>
+    <button onclick="extend()">Estirar</button>
+    <button onclick="toggleExplode()">Despiece</button>
+  </div>
+
+  <div id="state">Estado: Guardado (≈85 cm)</div>
+
+  <p class="small desktopHint">
+    Arrastra para rotar · rueda para zoom.
+  </p>
+  <p class="small" id="mobileHint">
+    Arrastra con un dedo para rotar · pellizca con dos dedos para zoom.
+  </p>
+</div>
+
+<canvas id="cv"></canvas>
+
+<script>
+const cv = document.getElementById("cv");
+const ctx = cv.getContext("2d");
+const state = document.getElementById("state");
+
+let yaw = -0.55;
+let pitch = 0.22;
+let zoom = 0.34;
+let drag = false;
+let lx = 0;
+let ly = 0;
+let explode = false;
+let t = 0;
+let target = 0;
+
+let activePointers = new Map();
+let pinchStartDistance = null;
+let pinchStartZoom = null;
+
+function resize(){
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  cv.width = Math.round(innerWidth * dpr);
+  cv.height = Math.round(innerHeight * dpr);
+  cv.style.width = innerWidth + "px";
+  cv.style.height = innerHeight + "px";
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+
+  // Ajuste automático de escala para móvil.
+  zoom = innerWidth < 700 ? Math.min(0.26, innerWidth/1600) : 0.34;
+}
+addEventListener("resize", resize);
+resize();
+
+function collapse(){
+  target = 0;
+  state.textContent = "Estado: Guardando → ≈85 cm";
+}
+function extend(){
+  target = 1;
+  state.textContent = "Estado: Estirando → 2.50 m";
+}
+function toggleExplode(){
+  explode = !explode;
+  state.textContent = explode ? "Estado: Vista de despiece" : (target > 0.5 ? "Estado: 2.50 m" : "Estado: Guardado (≈85 cm)");
+}
+
+cv.addEventListener("pointerdown", e=>{
+  activePointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  cv.setPointerCapture(e.pointerId);
+
+  if(activePointers.size===1){
+    drag=true;
+    lx=e.clientX;
+    ly=e.clientY;
+  }
+});
+
+cv.addEventListener("pointermove", e=>{
+  if(!activePointers.has(e.pointerId)) return;
+  activePointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+
+  if(activePointers.size===1 && drag){
+    yaw += (e.clientX-lx)*0.008;
+    pitch += (e.clientY-ly)*0.006;
+    pitch = Math.max(-1,Math.min(1,pitch));
+    lx=e.clientX;
+    ly=e.clientY;
+  }
+
+  if(activePointers.size===2){
+    const pts=[...activePointers.values()];
+    const d=Math.hypot(pts[0].x-pts[1].x,pts[0].y-pts[1].y);
+
+    if(pinchStartDistance===null){
+      pinchStartDistance=d;
+      pinchStartZoom=zoom;
+    } else {
+      zoom = pinchStartZoom * (d/pinchStartDistance);
+      zoom = Math.max(0.10,Math.min(0.75,zoom));
+    }
+  }
+});
+
+function endPointer(e){
+  activePointers.delete(e.pointerId);
+  drag = activePointers.size===1;
+  pinchStartDistance=null;
+  pinchStartZoom=null;
+
+  if(activePointers.size===1){
+    const p=[...activePointers.values()][0];
+    lx=p.x; ly=p.y;
+  }
+}
+cv.addEventListener("pointerup",endPointer);
+cv.addEventListener("pointercancel",endPointer);
+
+cv.addEventListener("wheel",e=>{
+  e.preventDefault();
+  zoom *= Math.exp(-e.deltaY*0.001);
+  zoom = Math.max(.12,Math.min(.8,zoom));
+},{passive:false});
+
+function P(x,y,z){
+  const cy=Math.cos(yaw), sy=Math.sin(yaw);
+  const cp=Math.cos(pitch), sp=Math.sin(pitch);
+
+  let X=x*cy-z*sy;
+  let Z=x*sy+z*cy;
+  let Y=y*cp-Z*sp;
+  Z=y*sp+Z*cp;
+
+  const perspective=900/(900+Z*.18);
+  const s=zoom*perspective;
+
+  const centerY = innerWidth < 700 ? innerHeight*0.70 : innerHeight*0.82;
+
+  return [
+    innerWidth/2 + X*s,
+    centerY - Y*s
+  ];
+}
+
+function line(a,b,w=2,c="#222"){
+  const A=P(...a), B=P(...b);
+  ctx.beginPath();
+  ctx.moveTo(...A);
+  ctx.lineTo(...B);
+  ctx.lineWidth=w;
+  ctx.strokeStyle=c;
+  ctx.stroke();
+}
+
+function circ(x,y,z,r){
+  const A=P(x,y,z), B=P(x+r,y,z);
+  ctx.beginPath();
+  ctx.arc(A[0],A[1],Math.abs(B[0]-A[0]),0,Math.PI*2);
+  ctx.lineWidth=.8;
+  ctx.strokeStyle="#666";
+  ctx.stroke();
+}
+
+function drawPost(cx){
+  const w=750;
+  const d=520;
+  const seg=720;
+  const overlap=120;
+  const ext=seg-overlap;
+
+  const offsets=[
+    0,
+    ext*t,
+    ext*2*t,
+    ext*3*t
+  ];
+
+  const x = cx + (explode ? (cx<0 ? -260 : 260) : 0);
+
+  // Base
+  line([x-w/2,0,-d/2],[x+w/2,0,-d/2],1,"#999");
+  line([x-w/2,0,d/2],[x+w/2,0,d/2],1,"#999");
+  line([x-w/2,0,-d/2],[x-w/2,0,d/2],2);
+  line([x+w/2,0,-d/2],[x+w/2,0,d/2],2);
+
+  // Postes telescópicos
+  [-w/2,w/2].forEach(side=>{
+    for(let i=0;i<4;i++){
+      const ww=18-i*3;
+      const y0=offsets[i];
+      const y1=offsets[i]+seg;
+      const xx=x+side+(side<0 ? -ww/4 : ww/4);
+
+      line([xx,y0,0],[xx,y1,0],3-i*0.3);
+
+      if(i<3){
+        line([xx-10,y1-35,0],[xx+10,y1-35,0],1.2,"#666");
+      }
+    }
+  });
+
+  const top=offsets[3]+seg;
+
+  // Travesaño superior
+  line([x-w/2,top,0],[x+w/2,top,0],3);
+
+  // Papel LED / círculos
+  if(t>0.12){
+    const cols=7;
+    const rows=9;
+
+    for(let r=0;r<rows;r++){
+      for(let c=0;c<cols;c++){
+        const xx=x-w/2+(c+1)*w/(cols+1);
+        const yy=top*.22+r*(top*.58)/(rows-1);
+        circ(xx,yy,0,32);
+      }
+    }
+  }
+
+  // Cota vertical
+  const A=P(x+w/2+80,0,0);
+  const B=P(x+w/2+80,top,0);
+
+  ctx.strokeStyle="#777";
+  ctx.lineWidth=1;
+  ctx.beginPath();
+  ctx.moveTo(A[0],A[1]);
+  ctx.lineTo(B[0],B[1]);
+  ctx.stroke();
+
+  ctx.fillStyle="#555";
+  ctx.font=(innerWidth<700 ? "10px Arial" : "12px Arial");
+  ctx.fillText(Math.round(top)+" mm",B[0]+8,(A[1]+B[1])/2);
+}
+
+function animate(){
+  t += (target-t)*0.08;
+
+  if(Math.abs(target-t)<0.003){
+    if(target===1) state.textContent = explode ? "Estado: Vista de despiece" : "Estado: Extendido · 2.50 m";
+    if(target===0) state.textContent = explode ? "Estado: Vista de despiece" : "Estado: Guardado · ≈85 cm";
+  }
+
+  ctx.clearRect(0,0,innerWidth,innerHeight);
+
+  for(let i=-5;i<=5;i++){
+    line([-2500,0,i*400],[2500,0,i*400],0.5,"#d2d2d2");
+  }
+
+  const spacing = innerWidth < 700 ? 330 : 380;
+  drawPost(-spacing);
+  drawPost(spacing);
+
+  requestAnimationFrame(animate);
+}
+animate();
+</script>
+</body>
+</html>
